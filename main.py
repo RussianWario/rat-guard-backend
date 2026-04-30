@@ -1,43 +1,47 @@
 import os
-import random
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import create_engine, text
 from fastapi.middleware.cors import CORSMiddleware
+from supabase import create_client, Client
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-# Проверка: SQLAlchemy требует, чтобы ссылка начиналась именно с postgresql://
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-engine = create_engine(DATABASE_URL)
+# Настройка приложения
 app = FastAPI()
 
+# РАЗРЕШАЕМ ПОДКЛЮЧЕНИЯ (CORS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"], 
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.get("/")
-def home():
-    return {"status": "Rat_Guard API Online"}
+# Подключение к Supabase
+url: str = os.environ.get("SUPABASE_URL")
+key: str = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(url, key)
 
-@app.get("/get_profile/{tg_id}")
-def get_profile(tg_id: int):
+@app.get("/")
+async def root():
+    return {"status": "Rat_Guard API is running"}
+
+@app.get("/get_profile/{user_id}")
+async def get_profile(user_id: str):
     try:
-        with engine.connect() as conn:
-            query = text("SELECT points, inventory FROM profiles WHERE id = :id")
-            result = conn.execute(query, {"id": tg_id}).fetchone()
+        # Очищаем ID от лишних символов Telegram (%26authuser и т.д.)
+        clean_id = user_id.split('&')[0].split('%')[0]
+        user_id_int = int(clean_id)
+        
+        # Запрос в базу данных
+        response = supabase.table("users").select("*").eq("user_id", user_id_int).execute()
+        
+        if not response.data:
+            # Если юзера нет, создаем дефолтного
+            new_user = {"user_id": user_id_int, "points": 0, "inventory": []}
+            supabase.table("users").insert(new_user).execute()
+            return new_user
             
-            if not result:
-                insert_query = text("INSERT INTO profiles (id, points, inventory) VALUES (:id, 0, '[]'::jsonb)")
-                conn.execute(insert_query, {"id": tg_id})
-                conn.commit()
-                return {"id": tg_id, "points": 0, "inventory": []}
-            
-            return {"id": tg_id, "points": result[0], "inventory": result[1] or []}
+        return response.data[0]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid User ID format")
     except Exception as e:
-        # Это покажет нам реальную причину ошибки в браузере
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
