@@ -5,16 +5,16 @@ from supabase import create_client, Client
 
 app = FastAPI()
 
-# Это позволяет твоему сайту (фронтенду) запрашивать данные у сервера
+# Полный доступ для фронтенда (GitHub Pages)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Подключаемся к базе данных Supabase
+# Подключение к Supabase через переменные окружения
 url: str = os.environ.get("SUPABASE_URL")
 key: str = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(url, key)
@@ -26,15 +26,19 @@ async def root():
 @app.get("/get_profile/{user_id}")
 async def get_profile(user_id: str):
     try:
-        # Убираем лишние символы из ID
-        clean_id = user_id.split('&')[0].split('%')[0]
+        # Улучшенная очистка ID от мусора Telegram
+        import re
+        clean_id = re.sub(r'\D', '', user_id) 
+        if not clean_id:
+            raise ValueError("Некорректный ID")
+        
         user_id_int = int(clean_id)
         
-        # Ищем в таблице 'profiles' (которую ты создала в SQL Editor)
+        # Запрос к таблице profiles
         response = supabase.table("profiles").select("*").eq("id", user_id_int).execute()
         
         if not response.data:
-            # Если тебя еще нет в базе, создаем запись
+            # Автоматическая регистрация нового участника
             new_user = {
                 "id": user_id_int, 
                 "points": 0, 
@@ -47,5 +51,5 @@ async def get_profile(user_id: str):
             
         return response.data[0]
     except Exception as e:
-        print(f"Ошибка: {e}")
+        print(f"Ошибка бэкенда: {e}")
         raise HTTPException(status_code=500, detail=str(e))
