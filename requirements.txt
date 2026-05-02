@@ -3,3 +3,4 @@ uvicorn[standard]
 supabase
 python-dotenv
 aiogram==2.25.1
+supabase
