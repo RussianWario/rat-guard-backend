@@ -1,6 +1,7 @@
 import asyncio
 import os
 import httpx
+from datetime import datetime, timezone # Добавили импорт времени
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher
@@ -10,7 +11,7 @@ from supabase import create_client, Client
 # Импортируем роутер кликера и логику
 from clicker import router as clicker_router
 from game_logic import sync_energy
-from leaderboard_logic import get_leaderboard_data  # НОВЫЙ ИМПОРТ
+from leaderboard_logic import get_leaderboard_data
 
 # --- Конфигурация ---
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -41,24 +42,34 @@ async def root():
 @app.get("/get_profile/{user_id}")
 async def get_profile(user_id: str):
     try:
-        clean_id = int("".join(filter(str.isdigit, user_id)))
+        # Улучшенная очистка ID
+        try:
+            clean_id = int(user_id)
+        except ValueError:
+            clean_id = int("".join(filter(str.isdigit, user_id)))
+        
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
         if not result.data:
+            # Лог для отладки в Render
+            print(f"DEBUG: Регистрация нового пользователя ID: {clean_id}")
+            
             new_user = {
                 "id": clean_id, 
                 "points": 0, 
                 "energy": 1000, 
                 "max_energy": 1000,
-                "multitap_level": 1
+                "multitap_level": 1,
+                "last_refill": datetime.now(timezone.utc).isoformat()
             }
-            supabase.table("profiles").insert(new_user).execute()
-            return new_user
+            # Используем insert().execute(), чтобы данные точно ушли
+            insert_result = supabase.table("profiles").insert(new_user).execute()
+            return insert_result.data[0]
         
         user_data = result.data[0]
         new_energy, last_time = sync_energy(user_data)
         
-        if new_energy != user_data['energy']:
+        if new_energy != user_data.get('energy'):
             supabase.table("profiles").update({
                 "energy": new_energy,
                 "last_refill": last_time.isoformat()
@@ -67,12 +78,11 @@ async def get_profile(user_id: str):
 
         return user_data
     except Exception as e:
+        print(f"ERROR в get_profile: {e}")
         return {"error": str(e)}
 
-# ОБНОВЛЕННЫЙ ЭНДПОИНТ ЛИДЕРБОРДА
 @app.get("/leaderboard")
 async def get_leaderboard():
-    # Теперь вся логика обработки имен живет в отдельном файле
     data = get_leaderboard_data(supabase)
     return data
 
@@ -87,14 +97,18 @@ async def keep_alive():
             await asyncio.sleep(600)
 
 async def start_bot():
+    # Задержка, чтобы избежать конфликта сессий при перезагрузке Render
+    await asyncio.sleep(10)
     while True:
         try:
             await bot.delete_webhook(drop_pending_updates=True)
             await dp.start_polling()
         except exceptions.TerminatedByOtherGetUpdates:
-            await asyncio.sleep(5)
-        except Exception:
+            print("Конфликт обновлений, ожидание...")
             await asyncio.sleep(10)
+        except Exception as e:
+            print(f"Ошибка бота: {e}")
+            await asyncio.sleep(15)
 
 @app.on_event("startup")
 async def on_startup():
