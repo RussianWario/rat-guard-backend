@@ -7,8 +7,9 @@ from aiogram import Bot, Dispatcher
 from aiogram.utils import exceptions
 from supabase import create_client, Client
 
-# Импортируем роутер из нашего нового файла
+# Импортируем роутер кликера и наши новые модули
 from clicker import router as clicker_router
+from game_logic import sync_energy, get_leaderboard_query
 
 # --- Конфигурация ---
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -30,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ПОДКЛЮЧАЕМ КЛИКЕР ОДНОЙ СТРОЧКОЙ
+# Подключаем кликер
 app.include_router(clicker_router)
 
 @app.api_route("/", methods=["GET", "HEAD"])
@@ -44,10 +45,39 @@ async def get_profile(user_id: str):
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
         if not result.data:
-            new_user = {"id": clean_id, "points": 0}
+            # Создаем нового пользователя с начальной энергией
+            new_user = {
+                "id": clean_id, 
+                "points": 0, 
+                "energy": 1000, 
+                "max_energy": 1000,
+                "multitap_level": 1
+            }
             supabase.table("profiles").insert(new_user).execute()
             return new_user
-        return result.data[0]
+        
+        # Если пользователь есть, синхронизируем его энергию (Вариант 1)
+        user_data = result.data[0]
+        new_energy, last_time = sync_energy(user_data)
+        
+        # Обновляем энергию в базе, если она изменилась
+        if new_energy != user_data['energy']:
+            supabase.table("profiles").update({
+                "energy": new_energy,
+                "last_refill": last_time.isoformat()
+            }).eq("id", clean_id).execute()
+            user_data['energy'] = new_energy
+
+        return user_data
+    except Exception as e:
+        return {"error": str(e)}
+
+# Эндпоинт для Лидерборда (Вариант 4)
+@app.get("/leaderboard")
+async def get_leaderboard():
+    try:
+        result = get_leaderboard_query(supabase)
+        return result.data
     except Exception as e:
         return {"error": str(e)}
 
@@ -67,6 +97,7 @@ async def start_bot():
             await bot.delete_webhook(drop_pending_updates=True)
             await dp.start_polling()
         except exceptions.TerminatedByOtherGetUpdates:
+            # Если кто-то еще зашел с тем же токеном, ждем 5 секунд
             await asyncio.sleep(5)
         except Exception:
             await asyncio.sleep(10)
