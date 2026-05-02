@@ -7,9 +7,10 @@ from aiogram import Bot, Dispatcher
 from aiogram.utils import exceptions
 from supabase import create_client, Client
 
-# Импортируем роутер кликера и наши новые модули
+# Импортируем роутер кликера и логику
 from clicker import router as clicker_router
-from game_logic import sync_energy, get_leaderboard_query
+from game_logic import sync_energy
+from leaderboard_logic import get_leaderboard_data  # НОВЫЙ ИМПОРТ
 
 # --- Конфигурация ---
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -22,7 +23,7 @@ app = FastAPI()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# --- CORS для работы Mini App ---
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,7 +32,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключаем кликер
 app.include_router(clicker_router)
 
 @app.api_route("/", methods=["GET", "HEAD"])
@@ -45,7 +45,6 @@ async def get_profile(user_id: str):
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
         if not result.data:
-            # Создаем нового пользователя с начальной энергией
             new_user = {
                 "id": clean_id, 
                 "points": 0, 
@@ -56,11 +55,9 @@ async def get_profile(user_id: str):
             supabase.table("profiles").insert(new_user).execute()
             return new_user
         
-        # Если пользователь есть, синхронизируем его энергию (Вариант 1)
         user_data = result.data[0]
         new_energy, last_time = sync_energy(user_data)
         
-        # Обновляем энергию в базе, если она изменилась
         if new_energy != user_data['energy']:
             supabase.table("profiles").update({
                 "energy": new_energy,
@@ -72,14 +69,12 @@ async def get_profile(user_id: str):
     except Exception as e:
         return {"error": str(e)}
 
-# Эндпоинт для Лидерборда (Вариант 4)
+# ОБНОВЛЕННЫЙ ЭНДПОИНТ ЛИДЕРБОРДА
 @app.get("/leaderboard")
 async def get_leaderboard():
-    try:
-        result = get_leaderboard_query(supabase)
-        return result.data
-    except Exception as e:
-        return {"error": str(e)}
+    # Теперь вся логика обработки имен живет в отдельном файле
+    data = get_leaderboard_data(supabase)
+    return data
 
 # --- Фоновые задачи ---
 async def keep_alive():
@@ -97,7 +92,6 @@ async def start_bot():
             await bot.delete_webhook(drop_pending_updates=True)
             await dp.start_polling()
         except exceptions.TerminatedByOtherGetUpdates:
-            # Если кто-то еще зашел с тем же токеном, ждем 5 секунд
             await asyncio.sleep(5)
         except Exception:
             await asyncio.sleep(10)
