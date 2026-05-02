@@ -7,22 +7,21 @@ from aiogram import Bot, Dispatcher
 from aiogram.utils import exceptions
 from supabase import create_client, Client
 
-# Импортируем наш новый модуль кликера
+# Импортируем роутер из нашего нового файла
 from clicker import router as clicker_router
 
-# --- Настройки ---
+# --- Конфигурация ---
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SELF_URL = "https://rat-guard-api.onrender.com/"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 app = FastAPI()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# --- CORS ---
+# --- CORS для работы Mini App ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,12 +30,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключаем логику кликера из отдельного файла
+# ПОДКЛЮЧАЕМ КЛИКЕР ОДНОЙ СТРОЧКОЙ
 app.include_router(clicker_router)
 
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
-    return {"status": "Rat_Guard API is online", "members": 141}
+    return {"status": "Rat_Guard API is online"}
 
 @app.get("/get_profile/{user_id}")
 async def get_profile(user_id: str):
@@ -45,14 +44,14 @@ async def get_profile(user_id: str):
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
         if not result.data:
-            new_user = {"id": clean_id, "points": 0, "inventory": [], "total_opened": 0}
+            new_user = {"id": clean_id, "points": 0}
             supabase.table("profiles").insert(new_user).execute()
             return new_user
         return result.data[0]
-    except:
-        return {"error": "Invalid ID"}
+    except Exception as e:
+        return {"error": str(e)}
 
-# --- Фоновые задачи (Бот и Пинг) ---
+# --- Фоновые задачи ---
 async def keep_alive():
     async with httpx.AsyncClient() as client:
         while True:
