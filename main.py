@@ -2,7 +2,7 @@ import asyncio
 import os
 import httpx
 from datetime import datetime, timezone
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher
 from aiogram.utils import exceptions
@@ -37,6 +37,20 @@ app.add_middleware(
 
 app.include_router(clicker_router)
 
+# --- Логика аватарок ---
+async def get_tg_avatar(user_id: int):
+    """Получает временную ссылку на фото профиля из Telegram"""
+    try:
+        photos = await bot.get_user_profile_photos(user_id, limit=1)
+        if photos.total_count > 0:
+            file_id = photos.photos[0][0].file_id
+            file = await bot.get_file(file_id)
+            return f"https://api.telegram.org/file/bot{API_TOKEN}/{file.file_path}"
+    except Exception as e:
+        print(f"Аватар не найден для {user_id}: {e}")
+    return ""
+
+# --- Эндпоинты ---
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "Rat_Guard API is online", "time": datetime.now().isoformat()}
@@ -50,6 +64,9 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
         except ValueError:
             clean_id = int("".join(filter(str.isdigit, user_id)))
         
+        # Получаем свежую аватарку
+        avatar_url = await get_tg_avatar(clean_id)
+        
         # Запрос в базу
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
@@ -58,23 +75,35 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
             print(f"DEBUG: Регистрация нового пользователя ID: {clean_id}")
             new_user = {
                 "id": clean_id, 
-                "username": username if username else f"Крыса #{str(clean_id)[-4:]}",
+                "username": username,
+                "avatar_url": avatar_url,
                 "points": 0, 
                 "energy": 1000, 
                 "max_energy": 1000,
                 "multitap_level": 1,
                 "last_refill": datetime.now(timezone.utc).isoformat()
             }
-            # Используем upsert для надежности
             insert_result = supabase.table("profiles").upsert(new_user).execute()
-            if insert_result.data:
-                return insert_result.data[0]
-            raise Exception("Base insert failed")
+            return insert_result.data[0]
         
-        # СИНХРОНИЗАЦИЯ ЭНЕРГИИ
+        # ОБНОВЛЕНИЕ ДАННЫХ (Ник и Аватарка)
         user_data = result.data[0]
-        new_energy, last_time = sync_energy(user_data)
+        updates = {}
+
+        # Если в базе дефолтная "Крыса", а пришел реальный ник — обновляем
+        if username != "Крыса" and user_data.get("username") != username:
+            updates["username"] = username
         
+        # Всегда пробуем обновить аватарку (они часто меняются)
+        if avatar_url and user_data.get("avatar_url") != avatar_url:
+            updates["avatar_url"] = avatar_url
+
+        if updates:
+            supabase.table("profiles").update(updates).eq("id", clean_id).execute()
+            user_data.update(updates)
+
+        # СИНХРОНИЗАЦИЯ ЭНЕРГИИ
+        new_energy, last_time = sync_energy(user_data)
         if new_energy != user_data.get('energy'):
             supabase.table("profiles").update({
                 "energy": new_energy,
@@ -86,17 +115,19 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
 
     except Exception as e:
         print(f"ERROR в get_profile: {e}")
-        return {"error": str(e), "details": "Check Supabase columns"}
+        return {"error": str(e)}
 
 @app.get("/leaderboard")
 async def get_leaderboard():
     try:
-        data = get_leaderboard_data(supabase)
-        if isinstance(data, list):
-            count_result = supabase.table("profiles").select("id", count="exact").execute()
-            total = count_result.count if count_result.count else len(data)
-            return {"users": data, "total_count": total}
-        return data
+        # Тянем данные напрямую, чтобы включить avatar_url
+        result = supabase.table("profiles").select("username, points, avatar_url").order("points", desc=True).limit(50).execute()
+        data = result.data
+        
+        count_result = supabase.table("profiles").select("id", count="exact").execute()
+        total = count_result.count if count_result.count else len(data)
+        
+        return {"users": data, "total_count": total}
     except Exception as e:
         print(f"ERROR в leaderboard: {e}")
         return {"users": [], "total_count": 0}
