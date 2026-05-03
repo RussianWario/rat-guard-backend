@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.utils import exceptions
 from supabase import create_client, Client
 
-# Импортируем роутер кликера и логику
+# Импорт твоих модулей
 from clicker import router as clicker_router
 from game_logic import sync_energy
 from leaderboard_logic import get_leaderboard_data
@@ -19,17 +19,14 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SELF_URL = "https://rat-guard-api.onrender.com/"
 
-# Инициализация Supabase с обработкой ошибок
-try:
-    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    print(f"CRITICAL ERROR: Failed to connect to Supabase: {e}")
+# Инициализация Supabase
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# --- CORS (Разрешаем запросы от Telegram) ---
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,21 +39,21 @@ app.include_router(clicker_router)
 
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
-    return {"status": "Rat_Guard API is online", "timestamp": datetime.now().isoformat()}
+    return {"status": "Rat_Guard API is online", "time": datetime.now().isoformat()}
 
 @app.get("/get_profile/{user_id}")
 async def get_profile(user_id: str, username: str = Query("Крыса")):
     try:
-        # 1. Очистка и проверка ID
+        # Очистка ID
         try:
             clean_id = int(user_id)
         except ValueError:
             clean_id = int("".join(filter(str.isdigit, user_id)))
         
-        # 2. Поиск пользователя в базе
+        # Запрос в базу
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
-        # 3. РЕГИСТРАЦИЯ (если юзера нет)
+        # РЕГИСТРАЦИЯ: если юзера нет
         if not result.data:
             print(f"DEBUG: Регистрация нового пользователя ID: {clean_id}")
             new_user = {
@@ -68,17 +65,16 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
                 "multitap_level": 1,
                 "last_refill": datetime.now(timezone.utc).isoformat()
             }
-            # Делаем upsert вместо insert для надежности
+            # Используем upsert для надежности
             insert_result = supabase.table("profiles").upsert(new_user).execute()
             if insert_result.data:
                 return insert_result.data[0]
-            raise HTTPException(status_code=500, detail="Failed to create user")
+            raise Exception("Base insert failed")
         
-        # 4. СИНХРОНИЗАЦИЯ (если юзер найден)
+        # СИНХРОНИЗАЦИЯ ЭНЕРГИИ
         user_data = result.data[0]
         new_energy, last_time = sync_energy(user_data)
         
-        # Обновляем энергию в базе, если она изменилась
         if new_energy != user_data.get('energy'):
             supabase.table("profiles").update({
                 "energy": new_energy,
@@ -90,7 +86,7 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
 
     except Exception as e:
         print(f"ERROR в get_profile: {e}")
-        return {"error": str(e), "id": user_id}
+        return {"error": str(e), "details": "Check Supabase columns"}
 
 @app.get("/leaderboard")
 async def get_leaderboard():
@@ -100,43 +96,35 @@ async def get_leaderboard():
             count_result = supabase.table("profiles").select("id", count="exact").execute()
             total = count_result.count if count_result.count else len(data)
             return {"users": data, "total_count": total}
-        return data if data else {"users": [], "total_count": 0}
+        return data
     except Exception as e:
         print(f"ERROR в leaderboard: {e}")
         return {"users": [], "total_count": 0}
 
 # --- Фоновые задачи ---
 async def keep_alive():
-    """Самопрозвон сервера для предотвращения сна"""
-    await asyncio.sleep(30) # Даем серверу запуститься
+    await asyncio.sleep(15)
     async with httpx.AsyncClient() as client:
         while True:
-            try:
-                await client.get(SELF_URL)
-                print("Keep-alive: ping success")
-            except:
-                pass
-            await asyncio.sleep(600) # 10 минут
+            try: await client.get(SELF_URL)
+            except: pass
+            await asyncio.sleep(600)
 
 async def start_bot():
-    """Запуск Telegram бота"""
-    # Ждем немного, чтобы FastAPI успел подняться
-    await asyncio.sleep(5)
-    print("Starting Telegram Bot Polling...")
+    """Запуск бота без блокировки API"""
+    await asyncio.sleep(10)
     while True:
         try:
-            # Сбрасываем все зависшие обновления перед стартом
             await bot.delete_webhook(drop_pending_updates=True)
             await dp.start_polling()
         except exceptions.TerminatedByOtherGetUpdates:
-            print("WARNING: Бот запущен где-то еще. Ожидание 30 секунд...")
+            print("Бот запущен локально! Ожидание 30 сек...")
             await asyncio.sleep(30)
         except Exception as e:
-            print(f"ERROR бота: {e}")
-            await asyncio.sleep(20)
+            print(f"Ошибка бота: {e}")
+            await asyncio.sleep(15)
 
 @app.on_event("startup")
 async def on_startup():
-    # Запускаем бота и пингер фоновыми задачами
     asyncio.create_task(start_bot())
     asyncio.create_task(keep_alive())
