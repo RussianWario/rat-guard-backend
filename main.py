@@ -42,7 +42,7 @@ async def root():
 @app.get("/get_profile/{user_id}")
 async def get_profile(user_id: str, username: str = Query("Крыса")):
     try:
-        # Очистка ID
+        # Очистка ID (на случай, если прилетит строка с мусором)
         try:
             clean_id = int(user_id)
         except ValueError:
@@ -51,12 +51,12 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
         if not result.data:
-            # РЕГИСТРАЦИЯ: Если пользователя нет, создаем запись с именем
+            # РЕГИСТРАЦИЯ: Если пользователя нет в базе, создаем его
             print(f"DEBUG: Регистрация нового пользователя ID: {clean_id}, Имя: {username}")
             
             new_user = {
                 "id": clean_id, 
-                "username": username, # Сохраняем имя из Telegram
+                "username": username, # Сохраняем имя, полученное из Telegram WebApp
                 "points": 0, 
                 "energy": 1000, 
                 "max_energy": 1000,
@@ -66,7 +66,7 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
             insert_result = supabase.table("profiles").insert(new_user).execute()
             return insert_result.data[0]
         
-        # СИНХРОНИЗАЦИЯ: Если пользователь есть, обновляем его энергию
+        # СИНХРОНИЗАЦИЯ: Если пользователь найден, обновляем энергию
         user_data = result.data[0]
         new_energy, last_time = sync_energy(user_data)
         
@@ -86,17 +86,17 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
 async def get_leaderboard():
     try:
         # Получаем данные из логики лидерборда
-        # Ожидается, что get_leaderboard_data вернет {'users': [...], 'total_count': X}
         data = get_leaderboard_data(supabase)
         
-        # Если в базе пусто или логика вернула не то, считаем вручную
-        if not data or 'total_count' not in data:
+        # Если логика вернула просто список (массив юзеров), оборачиваем его в нужный формат
+        if isinstance(data, list):
             count_result = supabase.table("profiles").select("id", count="exact").execute()
-            total = count_result.count if count_result.count else 0
-            
-            # Если логика вернула только список юзеров
-            users_list = data if isinstance(data, list) else []
-            return {"users": users_list, "total_count": total}
+            total = count_result.count if count_result.count else len(data)
+            return {"users": data, "total_count": total}
+        
+        # Если данных нет вообще
+        if not data:
+            return {"users": [], "total_count": 0}
             
         return data
     except Exception as e:
@@ -105,15 +105,17 @@ async def get_leaderboard():
 
 # --- Фоновые задачи ---
 async def keep_alive():
+    """Предотвращает 'засыпание' сервера на Render"""
     async with httpx.AsyncClient() as client:
         while True:
             try:
                 await client.get(SELF_URL)
             except:
                 pass
-            await asyncio.sleep(600)
+            await asyncio.sleep(600) # 10 минут
 
 async def start_bot():
+    """Запуск Telegram бота в режиме Polling"""
     await asyncio.sleep(10)
     while True:
         try:
