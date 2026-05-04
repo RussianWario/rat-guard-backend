@@ -19,8 +19,8 @@ API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SELF_URL = "https://rat-guard-api.onrender.com/"
-# Укажи здесь прямую ссылку на свой Mini App (index.html)
-WEB_APP_URL = "https://твой-сайт.github.io/index.html" 
+# Твоя ссылка из настроек BotFather
+WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/" 
 
 # Инициализация Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -38,14 +38,17 @@ async def send_welcome(message: types.Message):
         "🧀 **Добро пожаловать в Rat Guard Hub!**\n\n"
         "Rat Guard — это Mini App игра для зрителей канала **kirisaa**.\n\n"
         "— Добывай сыр тапами по экрану.\n"
-        "— Улучшай мультутап и восстанавливай энергию.\n"
+        "— Улучшай мультатап и восстанавливай энергию.\n"
         "— Врывайся в топ-100 лучших крыс.\n\n"
         "Присоединяйся к гвардии и начни свой путь к сырному господству прямо сейчас! 🐀🚀"
     )
     
-    # Создаем клавиатуру с кнопкой Web App, которая заменит поле ввода
-    # persistent=True (в новых API) или просто настройка обычного меню
-    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    # Создаем клавиатуру, которая перекрывает стандартную
+    # input_field_placeholder заменяет текст "Сообщение..." на твой вариант
+    markup = ReplyKeyboardMarkup(
+        resize_keyboard=True, 
+        input_field_placeholder="Нажми кнопку ниже 👇"
+    )
     web_app_btn = KeyboardButton(
         text="Склад 🧀", 
         web_app=WebAppInfo(url=WEB_APP_URL)
@@ -57,9 +60,7 @@ async def send_welcome(message: types.Message):
 @dp.message_handler()
 async def block_messages(message: types.Message):
     """Игнорирует любые текстовые сообщения, чтобы боту нельзя было писать"""
-    # Если хочешь, чтобы бот молча удалял сообщения (нужны права админа):
-    # try: await message.delete()
-    # except: pass
+    # Бот просто молчит в ответ на любой текст
     pass
 
 # --- CORS ---
