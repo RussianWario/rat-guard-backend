@@ -4,8 +4,9 @@ import httpx
 from datetime import datetime, timezone
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, types
 from aiogram.utils import exceptions
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from supabase import create_client, Client
 
 # Импорт твоих модулей
@@ -18,6 +19,8 @@ API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SELF_URL = "https://rat-guard-api.onrender.com/"
+# Укажи здесь прямую ссылку на свой Mini App (index.html)
+WEB_APP_URL = "https://твой-сайт.github.io/index.html" 
 
 # Инициализация Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -25,6 +28,39 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = FastAPI()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
+
+# --- ЛОГИКА БОТА (НОВОЕ) ---
+
+@dp.message_handler(commands=['start'])
+async def send_welcome(message: types.Message):
+    """Отправляет инструкцию и устанавливает постоянную кнопку Склад"""
+    instruction = (
+        "🧀 **Добро пожаловать в Rat Guard Hub!**\n\n"
+        "Rat Guard — это Mini App игра для зрителей канала **kirisaa**.\n\n"
+        "— Добывай сыр тапами по экрану.\n"
+        "— Улучшай мультутап и восстанавливай энергию.\n"
+        "— Врывайся в топ-100 лучших крыс.\n\n"
+        "Присоединяйся к гвардии и начни свой путь к сырному господству прямо сейчас! 🐀🚀"
+    )
+    
+    # Создаем клавиатуру с кнопкой Web App, которая заменит поле ввода
+    # persistent=True (в новых API) или просто настройка обычного меню
+    markup = ReplyKeyboardMarkup(resize_keyboard=True)
+    web_app_btn = KeyboardButton(
+        text="Склад 🧀", 
+        web_app=WebAppInfo(url=WEB_APP_URL)
+    )
+    markup.add(web_app_btn)
+
+    await message.answer(instruction, reply_markup=markup, parse_mode="Markdown")
+
+@dp.message_handler()
+async def block_messages(message: types.Message):
+    """Игнорирует любые текстовые сообщения, чтобы боту нельзя было писать"""
+    # Если хочешь, чтобы бот молча удалял сообщения (нужны права админа):
+    # try: await message.delete()
+    # except: pass
+    pass
 
 # --- CORS ---
 app.add_middleware(
@@ -39,7 +75,6 @@ app.include_router(clicker_router)
 
 # --- Логика аватарок ---
 async def get_tg_avatar(user_id: int):
-    """Получает временную ссылку на фото профиля из Telegram"""
     try:
         photos = await bot.get_user_profile_photos(user_id, limit=1)
         if photos.total_count > 0:
@@ -58,21 +93,15 @@ async def root():
 @app.get("/get_profile/{user_id}")
 async def get_profile(user_id: str, username: str = Query("Крыса")):
     try:
-        # Очистка ID
         try:
             clean_id = int(user_id)
         except ValueError:
             clean_id = int("".join(filter(str.isdigit, user_id)))
         
-        # Получаем свежую аватарку
         avatar_url = await get_tg_avatar(clean_id)
-        
-        # Запрос в базу
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
-        # РЕГИСТРАЦИЯ: если юзера нет
         if not result.data:
-            print(f"DEBUG: Регистрация нового пользователя ID: {clean_id}")
             new_user = {
                 "id": clean_id, 
                 "username": username,
@@ -86,15 +115,12 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
             insert_result = supabase.table("profiles").upsert(new_user).execute()
             return insert_result.data[0]
         
-        # ОБНОВЛЕНИЕ ДАННЫХ (Ник и Аватарка)
         user_data = result.data[0]
         updates = {}
 
-        # Если в базе дефолтная "Крыса", а пришел реальный ник — обновляем
         if username != "Крыса" and user_data.get("username") != username:
             updates["username"] = username
         
-        # Всегда пробуем обновить аватарку (они часто меняются)
         if avatar_url and user_data.get("avatar_url") != avatar_url:
             updates["avatar_url"] = avatar_url
 
@@ -102,7 +128,6 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
             supabase.table("profiles").update(updates).eq("id", clean_id).execute()
             user_data.update(updates)
 
-        # СИНХРОНИЗАЦИЯ ЭНЕРГИИ
         new_energy, last_time = sync_energy(user_data)
         if new_energy != user_data.get('energy'):
             supabase.table("profiles").update({
@@ -120,13 +145,10 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
 @app.get("/leaderboard")
 async def get_leaderboard():
     try:
-        # Тянем данные напрямую, чтобы включить avatar_url
         result = supabase.table("profiles").select("username, points, avatar_url").order("points", desc=True).limit(50).execute()
         data = result.data
-        
         count_result = supabase.table("profiles").select("id", count="exact").execute()
         total = count_result.count if count_result.count else len(data)
-        
         return {"users": data, "total_count": total}
     except Exception as e:
         print(f"ERROR в leaderboard: {e}")
