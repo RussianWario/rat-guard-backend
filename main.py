@@ -12,15 +12,14 @@ from supabase import create_client, Client
 # Импорт твоих модулей
 from clicker import router as clicker_router
 from game_logic import sync_energy
-from leaderboard_logic import get_leaderboard_data
 
 # --- Конфигурация ---
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SELF_URL = "https://rat-guard-api.onrender.com/"
-# Твоя ссылка из настроек BotFather
-WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/" 
+# Ссылка проверена и очищена от лишних символов
+WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/?v=1" 
 
 # Инициализация Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -29,26 +28,31 @@ app = FastAPI()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# --- ЛОГИКА БОТА (НОВОЕ) ---
+# --- ЛОГИКА БОТА ---
 
 @dp.message_handler(commands=['start'])
 async def send_welcome(message: types.Message):
-    """Отправляет инструкцию и устанавливает постоянную кнопку Склад"""
+    """Отправляет инструкцию и устанавливает кнопку Склад"""
+    try:
+        await message.delete() # Чистим чат от команды /start
+    except:
+        pass
+
+    user_name = message.from_user.first_name or "Гвардеец"
     instruction = (
-        "🧀 **Добро пожаловать в Rat Guard Hub!**\n\n"
+        f"🧀 **Привет, {user_name}! Добро пожаловать в Rat Guard Hub!**\n\n"
         "Rat Guard — это Mini App игра для зрителей канала **kirisaa**.\n\n"
         "— Добывай сыр тапами по экрану.\n"
         "— Улучшай мультатап и восстанавливай энергию.\n"
         "— Врывайся в топ-100 лучших крыс.\n\n"
-        "Присоединяйся к гвардии и начни свой путь к сырному господству прямо сейчас! 🐀🚀"
+        "Жми кнопку ниже, чтобы начать! 🐀🚀"
     )
     
-    # Создаем клавиатуру, которая перекрывает стандартную
-    # input_field_placeholder заменяет текст "Сообщение..." на твой вариант
     markup = ReplyKeyboardMarkup(
         resize_keyboard=True, 
-        input_field_placeholder="Нажми кнопку ниже 👇"
+        input_field_placeholder="Твой склад готов 👇"
     )
+    # Кнопка привязана к твоему URL
     web_app_btn = KeyboardButton(
         text="Склад 🧀", 
         web_app=WebAppInfo(url=WEB_APP_URL)
@@ -59,8 +63,7 @@ async def send_welcome(message: types.Message):
 
 @dp.message_handler()
 async def block_messages(message: types.Message):
-    """Игнорирует любые текстовые сообщения, чтобы боту нельзя было писать"""
-    # Бот просто молчит в ответ на любой текст
+    """Игнорирует обычный текст"""
     pass
 
 # --- CORS ---
@@ -86,7 +89,7 @@ async def get_tg_avatar(user_id: int):
         print(f"Аватар не найден для {user_id}: {e}")
     return ""
 
-# --- Эндпоинты ---
+# --- Эндпоинты API ---
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "Rat_Guard API is online", "time": datetime.now().isoformat()}
@@ -94,11 +97,7 @@ async def root():
 @app.get("/get_profile/{user_id}")
 async def get_profile(user_id: str, username: str = Query("Крыса")):
     try:
-        try:
-            clean_id = int(user_id)
-        except ValueError:
-            clean_id = int("".join(filter(str.isdigit, user_id)))
-        
+        clean_id = int("".join(filter(str.isdigit, user_id)))
         avatar_url = await get_tg_avatar(clean_id)
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
@@ -117,11 +116,10 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
             return insert_result.data[0]
         
         user_data = result.data[0]
+        # Обновляем профиль, если изменился ник или ава
         updates = {}
-
         if username != "Крыса" and user_data.get("username") != username:
             updates["username"] = username
-        
         if avatar_url and user_data.get("avatar_url") != avatar_url:
             updates["avatar_url"] = avatar_url
 
@@ -140,45 +138,20 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
         return user_data
 
     except Exception as e:
-        print(f"ERROR в get_profile: {e}")
         return {"error": str(e)}
 
-@app.get("/leaderboard")
-async def get_leaderboard():
-    try:
-        result = supabase.table("profiles").select("username, points, avatar_url").order("points", desc=True).limit(50).execute()
-        data = result.data
-        count_result = supabase.table("profiles").select("id", count="exact").execute()
-        total = count_result.count if count_result.count else len(data)
-        return {"users": data, "total_count": total}
-    except Exception as e:
-        print(f"ERROR в leaderboard: {e}")
-        return {"users": [], "total_count": 0}
-
-# --- Фоновые задачи ---
-async def keep_alive():
-    await asyncio.sleep(15)
-    async with httpx.AsyncClient() as client:
-        while True:
-            try: await client.get(SELF_URL)
-            except: pass
-            await asyncio.sleep(600)
-
+# --- Запуск ---
 async def start_bot():
-    """Запуск бота без блокировки API"""
-    await asyncio.sleep(10)
+    await asyncio.sleep(5) # Даем API время прогреться
     while True:
         try:
             await bot.delete_webhook(drop_pending_updates=True)
             await dp.start_polling()
         except exceptions.TerminatedByOtherGetUpdates:
-            print("Бот запущен локально! Ожидание 30 сек...")
             await asyncio.sleep(30)
         except Exception as e:
-            print(f"Ошибка бота: {e}")
             await asyncio.sleep(15)
 
 @app.on_event("startup")
 async def on_startup():
     asyncio.create_task(start_bot())
-    asyncio.create_task(keep_alive())
