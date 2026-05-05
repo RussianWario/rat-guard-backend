@@ -3,18 +3,20 @@ def get_leaderboard_data(supabase):
     Получает топ-10 игроков и форматирует их имена.
     """
     try:
-        # Запрос к базе: берем id, ник и очки, сортируем по убыванию
+        # Запрос к базе: берем id, основной username и очки
+        # Сортируем по убыванию points
         result = supabase.table("profiles") \
-            .select("id, twitch_username, points") \
+            .select("id, username, points") \
             .order("points", desc=True) \
             .limit(10) \
             .execute()
         
         formatted_list = []
         for row in result.data:
-            display_name = row.get("twitch_username")
+            # Сначала пробуем взять обычный username (он виден на скриншоте image_1f1717.png)
+            display_name = row.get("username")
             
-            # Если ника Twitch нет, создаем имя на основе Telegram ID
+            # Если имени нет, используем последние 4 цифры ID
             if not display_name:
                 user_id_str = str(row.get("id"))
                 display_name = f"Крыса #{user_id_str[-4:]}"
