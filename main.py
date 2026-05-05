@@ -8,14 +8,15 @@ from aiogram.utils import exceptions
 from aiogram.types import WebAppInfo
 from supabase import create_client, Client
 
-# Импорт роутера (энергия больше не нужна)
+# Импорт роутера и логики лидерборда
 from clicker import router as clicker_router
+# Убедись, что файл leaderboard_logic.py лежит в той же папке
+from leaderboard_logic import get_leaderboard_data 
 
 # --- Конфигурация ---
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-# Твоя ссылка на фронтенд
 WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/?v=2.3" 
 
 # Инициализация Supabase
@@ -25,8 +26,18 @@ app = FastAPI()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# --- ЛОГИКА БОТА ---
+# --- CORS ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+app.include_router(clicker_router)
+
+# --- ЛОГИКА БОТА ---
 @dp.message_handler(commands=['start'])
 async def send_welcome(message: types.Message):
     try:
@@ -40,22 +51,10 @@ async def send_welcome(message: types.Message):
         f"🧀 <b>Привет, {user_name}! Добро пожаловать в Rat Guard Hub!</b>\n\n"
         "Rat Guard — это Mini App игра для зрителей канала <b>kirisaa</b>.\n\n"
         "— Добывай сыр тапами по экрану (БЕЗ ЛИМИТОВ!).\n"
-        "— Врывайся в топ-100 лучших крыс.\n\n"
+        "— Врывайся в топ-10 лучших крыс.\n\n"
         "Жми кнопку <b>«Склад 🧀»</b> слева от ввода, чтобы начать! 🐀🚀"
     )
-
     await message.answer(instruction, parse_mode="HTML")
-
-# --- CORS ---
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(clicker_router)
 
 # --- Логика аватарок ---
 async def get_tg_avatar(user_id: int):
@@ -73,9 +72,13 @@ async def get_tg_avatar(user_id: int):
 
 @app.get("/leaderboard")
 async def get_leaderboard():
+    """
+    Использует исправленную логику для формирования топа
+    """
     try:
-        result = supabase.table("profiles").select("*").order("points", desc=True).limit(100).execute()
-        return result.data
+        # Вызываем функцию из leaderboard_logic.py
+        data = get_leaderboard_data(supabase)
+        return data
     except Exception as e:
         return {"error": str(e)}
 
@@ -86,7 +89,6 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
         avatar_url = await get_tg_avatar(clean_id)
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
-        # Если пользователя нет — создаем без полей энергии
         if not result.data:
             new_user = {
                 "id": clean_id, 
@@ -100,7 +102,6 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
         
         user_data = result.data[0]
         
-        # Обновление аватарки и ника если изменились
         updates = {}
         if username != "Крыса" and user_data.get("username") != username:
             updates["username"] = username
