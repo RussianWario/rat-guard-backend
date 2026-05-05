@@ -1,6 +1,5 @@
 import asyncio
 import os
-import httpx
 from datetime import datetime, timezone
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,7 +8,7 @@ from aiogram.utils import exceptions
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
 from supabase import create_client, Client
 
-# Импорт твоих модулей
+# Импорт твоих модулей (убедись, что файлы clicker.py и game_logic.py лежат рядом)
 from clicker import router as clicker_router
 from game_logic import sync_energy
 
@@ -17,9 +16,8 @@ from game_logic import sync_energy
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-SELF_URL = "https://rat-guard-api.onrender.com/"
-# Ссылка проверена и очищена от лишних символов
-WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/?v=1" 
+# Ссылка на фронтенд (v=2 для сброса кэша)
+WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/?v=2" 
 
 # Инициализация Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -52,7 +50,6 @@ async def send_welcome(message: types.Message):
         resize_keyboard=True, 
         input_field_placeholder="Твой склад готов 👇"
     )
-    # Кнопка привязана к твоему URL
     web_app_btn = KeyboardButton(
         text="Склад 🧀", 
         web_app=WebAppInfo(url=WEB_APP_URL)
@@ -75,6 +72,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Подключаем твой роутер кликера
 app.include_router(clicker_router)
 
 # --- Логика аватарок ---
@@ -116,6 +114,7 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
             return insert_result.data[0]
         
         user_data = result.data[0]
+        
         # Обновляем профиль, если изменился ник или ава
         updates = {}
         if username != "Крыса" and user_data.get("username") != username:
@@ -127,6 +126,7 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
             supabase.table("profiles").update(updates).eq("id", clean_id).execute()
             user_data.update(updates)
 
+        # Синхронизация энергии
         new_energy, last_time = sync_energy(user_data)
         if new_energy != user_data.get('energy'):
             supabase.table("profiles").update({
@@ -140,18 +140,24 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
     except Exception as e:
         return {"error": str(e)}
 
-# --- Запуск ---
+# --- Исправленный цикл запуска бота ---
 async def start_bot():
-    await asyncio.sleep(5) # Даем API время прогреться
+    """Запуск бота в отдельном потоке, чтобы не вешать FastAPI"""
+    await asyncio.sleep(5) # Ждем старта сервера
+    print("Запуск Telegram бота...")
     while True:
         try:
+            # Сбрасываем вебхуки перед каждым входом в polling
             await bot.delete_webhook(drop_pending_updates=True)
             await dp.start_polling()
         except exceptions.TerminatedByOtherGetUpdates:
+            print("Обнаружен другой экземпляр бота, перезапуск через 30 сек...")
             await asyncio.sleep(30)
         except Exception as e:
+            print(f"Ошибка бота: {e}, перезапуск через 15 сек...")
             await asyncio.sleep(15)
 
 @app.on_event("startup")
 async def on_startup():
+    # Запускаем бота как фоновую задачу
     asyncio.create_task(start_bot())
