@@ -5,10 +5,10 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import exceptions
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, WebAppInfo
+from aiogram.types import WebAppInfo
 from supabase import create_client, Client
 
-# Импорт твоих модулей (убедись, что файлы clicker.py и game_logic.py лежат рядом)
+# Импорт твоих модулей (проверь наличие clicker.py и game_logic.py)
 from clicker import router as clicker_router
 from game_logic import sync_energy
 
@@ -16,8 +16,7 @@ from game_logic import sync_energy
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-# Ссылка на фронтенд (v=2 для сброса кэша)
-WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/?v=2" 
+WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/?v=2.3" 
 
 # Инициализация Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -30,38 +29,25 @@ dp = Dispatcher(bot)
 
 @dp.message_handler(commands=['start'])
 async def send_welcome(message: types.Message):
-    """Отправляет инструкцию и устанавливает кнопку Склад"""
+    """Отправляет инструкцию. Запуск Mini App теперь только через кнопку слева"""
     try:
-        await message.delete() # Чистим чат от команды /start
+        await message.delete() 
     except:
         pass
 
     user_name = message.from_user.first_name or "Гвардеец"
+    
+    # HTML-разметка, чтобы избежать ошибок с символами в никах
     instruction = (
-        f"🧀 **Привет, {user_name}! Добро пожаловать в Rat Guard Hub!**\n\n"
-        "Rat Guard — это Mini App игра для зрителей канала **kirisaa**.\n\n"
+        f"🧀 <b>Привет, {user_name}! Добро пожаловать в Rat Guard Hub!</b>\n\n"
+        "Rat Guard — это Mini App игра для зрителей канала <b>kirisaa</b>.\n\n"
         "— Добывай сыр тапами по экрану.\n"
         "— Улучшай мультатап и восстанавливай энергию.\n"
         "— Врывайся в топ-100 лучших крыс.\n\n"
-        "Жми кнопку ниже, чтобы начать! 🐀🚀"
+        "Жми кнопку <b>«Склад 🧀»</b> слева от ввода, чтобы начать! 🐀🚀"
     )
-    
-    markup = ReplyKeyboardMarkup(
-        resize_keyboard=True, 
-        input_field_placeholder="Твой склад готов 👇"
-    )
-    web_app_btn = KeyboardButton(
-        text="Склад 🧀", 
-        web_app=WebAppInfo(url=WEB_APP_URL)
-    )
-    markup.add(web_app_btn)
 
-    await message.answer(instruction, reply_markup=markup, parse_mode="Markdown")
-
-@dp.message_handler()
-async def block_messages(message: types.Message):
-    """Игнорирует обычный текст"""
-    pass
+    await message.answer(instruction, parse_mode="HTML")
 
 # --- CORS ---
 app.add_middleware(
@@ -72,7 +58,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключаем твой роутер кликера
 app.include_router(clicker_router)
 
 # --- Логика аватарок ---
@@ -83,14 +68,20 @@ async def get_tg_avatar(user_id: int):
             file_id = photos.photos[0][0].file_id
             file = await bot.get_file(file_id)
             return f"https://api.telegram.org/file/bot{API_TOKEN}/{file.file_path}"
-    except Exception as e:
-        print(f"Аватар не найден для {user_id}: {e}")
+    except:
+        return ""
     return ""
 
 # --- Эндпоинты API ---
-@app.api_route("/", methods=["GET", "HEAD"])
-async def root():
-    return {"status": "Rat_Guard API is online", "time": datetime.now().isoformat()}
+
+@app.get("/leaderboard")
+async def get_leaderboard():
+    """Эндпоинт для таблицы лидеров"""
+    try:
+        result = supabase.table("profiles").select("*").order("points", desc=True).limit(100).execute()
+        return result.data
+    except Exception as e:
+        return {"error": str(e)}
 
 @app.get("/get_profile/{user_id}")
 async def get_profile(user_id: str, username: str = Query("Крыса")):
@@ -115,7 +106,7 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
         
         user_data = result.data[0]
         
-        # Обновляем профиль, если изменился ник или ава
+        # Обновление данных профиля
         updates = {}
         if username != "Крыса" and user_data.get("username") != username:
             updates["username"] = username
@@ -136,28 +127,35 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
             user_data['energy'] = new_energy
 
         return user_data
-
     except Exception as e:
         return {"error": str(e)}
 
-# --- Исправленный цикл запуска бота ---
+# --- Запуск бота ---
 async def start_bot():
-    """Запуск бота в отдельном потоке, чтобы не вешать FastAPI"""
-    await asyncio.sleep(5) # Ждем старта сервера
+    await asyncio.sleep(5)
+    
+    # Программная установка кнопки меню (WebApp Button)
+    try:
+        await bot.set_chat_menu_button(
+            menu_button=types.MenuButtonWebApp(
+                text="Склад 🧀",
+                web_app=WebAppInfo(url=WEB_APP_URL)
+            )
+        )
+        print("Системная кнопка меню обновлена.")
+    except Exception as e:
+        print(f"Ошибка установки кнопки меню: {e}")
+
     print("Запуск Telegram бота...")
     while True:
         try:
-            # Сбрасываем вебхуки перед каждым входом в polling
             await bot.delete_webhook(drop_pending_updates=True)
             await dp.start_polling()
         except exceptions.TerminatedByOtherGetUpdates:
-            print("Обнаружен другой экземпляр бота, перезапуск через 30 сек...")
             await asyncio.sleep(30)
-        except Exception as e:
-            print(f"Ошибка бота: {e}, перезапуск через 15 сек...")
+        except Exception:
             await asyncio.sleep(15)
 
 @app.on_event("startup")
 async def on_startup():
-    # Запускаем бота как фоновую задачу
     asyncio.create_task(start_bot())
