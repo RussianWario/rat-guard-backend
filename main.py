@@ -8,9 +8,9 @@ from aiogram.utils import exceptions
 from aiogram.types import WebAppInfo
 from supabase import create_client, Client
 
-# Импорт роутера и логики лидерборда
+# Импорт роутеров и логики лидерборда
 from clicker import router as clicker_router
-# Убедись, что файл leaderboard_logic.py лежит в той же папке
+from upgrades_router import router as upgrades_router  # <-- НАШ НОВЫЙ МОДУЛЬ УЛУЧШЕНИЙ
 from leaderboard_logic import get_leaderboard_data 
 
 # --- Конфигурация ---
@@ -19,7 +19,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/?v=2.3" 
 
-# Инициализация Supabase
+# Инициализация Supabase (экспортируется и используется в роутерах)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
@@ -35,7 +35,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Подключение изолированных модулей
 app.include_router(clicker_router)
+app.include_router(upgrades_router)  # <-- Регистрируем роутер улучшений в FastAPI
 
 # --- ЛОГИКА БОТА ---
 @dp.message_handler(commands=['start'])
@@ -76,7 +78,6 @@ async def get_leaderboard():
     Использует исправленную логику для формирования топа
     """
     try:
-        # Вызываем функцию из leaderboard_logic.py
         data = get_leaderboard_data(supabase)
         return data
     except Exception as e:
@@ -89,18 +90,29 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
         avatar_url = await get_tg_avatar(clean_id)
         result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
         
+        # Если пользователя еще нет в базе — регистрируем с дефолтными параметрами
         if not result.data:
             new_user = {
                 "id": clean_id, 
                 "username": username,
                 "avatar_url": avatar_url,
                 "points": 0,
-                "multitap_level": 1
+                "multitap_level": 1,
+                "level": 1,
+                "stars": 0
             }
             insert_result = supabase.table("profiles").upsert(new_user).execute()
             return insert_result.data[0]
         
         user_data = result.data[0]
+        
+        # Защита фронтенда: гарантируем, что поля не прилетят как None/null
+        if user_data.get("multitap_level") is None:
+            user_data["multitap_level"] = 1
+        if user_data.get("level") is None:
+            user_data["level"] = 1
+        if user_data.get("stars") is None:
+            user_data["stars"] = 0
         
         updates = {}
         if username != "Крыса" and user_data.get("username") != username:
