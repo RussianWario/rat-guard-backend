@@ -2,8 +2,8 @@
 from fastapi import APIRouter, HTTPException
 import math
 
-# Импортируем клиент supabase из основного файла main.py
-from main import supabase 
+# ИМПОРТ КЛИЕНТА ИЗ ОТДЕЛЬНОГО МОДУЛЯ (Защита от цикличного импорта)
+from database import supabase 
 
 router = APIRouter(prefix="/upgrade", tags=["Upgrades"])
 
@@ -17,8 +17,8 @@ def calculate_cost(current_level: int) -> int:
 
 @router.post("/multitap/{user_id}")
 async def buy_multitap(user_id: int):
-    # 1. Получаем текущие данные игрока из таблицы profiles
-    res = supabase.table("profiles").select("points", "multitap_level", "level").eq("user_id", user_id).execute()
+    # 1. Получаем текущие данные игрока из таблицы profiles по полю "id"
+    res = supabase.table("profiles").select("points", "multitap_level", "level").eq("id", user_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Крыса не найдена в логове")
     
@@ -32,18 +32,18 @@ async def buy_multitap(user_id: int):
     # 2. Считаем стоимость апгрейда
     cost = calculate_cost(current_multitap)
     
-    # 3. Проверяем баланс на бэке (защита от накрутки через Postman/скрипты)
+    # 3. Проверяем баланс на бэке (защита от накрутки)
     if current_points < cost:
         return {"status": "error", "message": "Недостаточно сыра 🧀"}
     
     new_points = current_points - cost
     new_multitap = current_multitap + 1
     
-    # 4. Сохраняем изменения обратно в таблицу profiles
+    # 4. Сохраняем изменения обратно в таблицу profiles, используя фильтр по "id"
     update_res = supabase.table("profiles").update({
         "points": new_points,
         "multitap_level": new_multitap
-    }).eq("user_id", user_id).execute()
+    }).eq("id", user_id).execute()
     
     if not update_res.data:
         raise HTTPException(status_code=500, detail="Ошибка при записи в логово")
