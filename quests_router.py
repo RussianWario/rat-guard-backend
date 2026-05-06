@@ -41,9 +41,9 @@ async def claim_quest_reward(user_id: int, quest_id: int):
         # 1. Проверяем, не забирал ли он уже награду за этот квест
         check = supabase.table("user_quests").select("*").eq("user_id", user_id).eq("quest_id", quest_id).execute()
         if check.data:
-            return {"status": "error", "message": "Награда за эту задачу уже в твоей норке!  Rat_Guard бдит 🐀"}
+            return {"status": "error", "message": "Награда за эту задачу уже в твоей норке! Rat_Guard бдит 🐀"}
             
-        # 2. Вытягиваем данные квеста и профиля игрока
+        # 2. Вытягиваем данные квеста и профиля игрока по колонке user_id
         quest_res = supabase.table("quests").select("*").eq("id", quest_id).execute()
         user_res = supabase.table("profiles").select("points", "level", "stars", "multitap_level", "total_clicks").eq("user_id", user_id).execute()
         
@@ -70,7 +70,7 @@ async def claim_quest_reward(user_id: int, quest_id: int):
                 
         elif quest_type == "total_clicks":
             if user_total_clicks < req_value:
-                return {"status": "error", "message": f"Маловато сыра натапано за всё время! Нужно: {req_value.toLocaleString('ru-RU') if hasattr(req_value, 'toLocaleString') else req_value}. (У тебя: {user_total_clicks})"}
+                return {"status": "error", "message": f"Маловато сыра натапано за всё время! Нужно: {req_value:,}. (У тебя: {user_total_clicks})"}
                 
         elif quest_type == "multitap_level":
             if user_multitap < req_value:
@@ -82,7 +82,7 @@ async def claim_quest_reward(user_id: int, quest_id: int):
         new_points = user_points + quest["reward_points"]
         new_stars = user_stars + quest["reward_stars"]
         
-        # Обновляем профиль в Supabase
+        # Обновляем профиль в Supabase по user_id
         supabase.table("profiles").update({
             "points": new_points,
             "stars": new_stars
@@ -98,7 +98,8 @@ async def claim_quest_reward(user_id: int, quest_id: int):
             "status": "ok",
             "message": f"Успешно! Получено {quest['reward_points']} 🧀 и {quest['reward_stars']} ⭐",
             "points": new_points,
-            "stars": new_stars
+            "stars": new_stars,
+            "level": user_level
         }
         
     except Exception as e:
