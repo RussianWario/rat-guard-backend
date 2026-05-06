@@ -6,27 +6,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import exceptions
 from aiogram.types import WebAppInfo
-from supabase import create_client, Client
+
+# ИМПОРТ КЛИЕНТА ИЗ ОТДЕЛЬНОГО МОДУЛЯ (Защита от цикличного импорта)
+from database import supabase
 
 # Импорт роутеров и логики лидерборда
 from clicker import router as clicker_router
-from upgrades_router import router as upgrades_router  # <-- НАШ НОВЫЙ МОДУЛЬ УЛУЧШЕНИЙ
+from upgrades_router import router as upgrades_router  # Наш новый модуль улучшений
 from leaderboard_logic import get_leaderboard_data 
 
 # --- Конфигурация ---
 API_TOKEN = os.getenv("TELEGRAM_TOKEN")
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 WEB_APP_URL = "https://russianwario.github.io/rat-guard-web/?v=2.3" 
-
-# Инициализация Supabase (экспортируется и используется в роутерах)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = FastAPI()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
-# --- CORS ---
+# --- CORS Middlewares ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -35,11 +32,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключение изолированных модулей
+# Подключение изолированных роутеров в FastAPI
 app.include_router(clicker_router)
-app.include_router(upgrades_router)  # <-- Регистрируем роутер улучшений в FastAPI
+app.include_router(upgrades_router)  # Регистрируем роутер улучшений
 
-# --- ЛОГИКА БОТА ---
+# --- ЛОГИКА ТЕЛЕГРАМ-БОТА ---
 @dp.message_handler(commands=['start'])
 async def send_welcome(message: types.Message):
     try:
@@ -70,12 +67,12 @@ async def get_tg_avatar(user_id: int):
         return ""
     return ""
 
-# --- Эндпоинты API ---
+# --- ЭНДПОИНТЫ API ---
 
 @app.get("/leaderboard")
 async def get_leaderboard():
     """
-    Использует исправленную логику для формирования топа
+    Использует логику из модуля leaderboard_logic для формирования топа
     """
     try:
         data = get_leaderboard_data(supabase)
@@ -128,7 +125,7 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
     except Exception as e:
         return {"error": str(e)}
 
-# --- Запуск бота ---
+# --- Фоновый запуск бота ---
 async def start_bot():
     await asyncio.sleep(5)
     try:
