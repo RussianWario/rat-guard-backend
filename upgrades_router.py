@@ -1,10 +1,8 @@
 # upgrades_router.py — Изолированный роутер для прокачки
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 import math
 
-# Импортируй сюда свой клиент supabase из основного проекта
-# (например: from main import supabase или из конфига)
+# Импортируем клиент supabase из основного файла main.py
 from main import supabase 
 
 router = APIRouter(prefix="/upgrade", tags=["Upgrades"])
@@ -19,28 +17,30 @@ def calculate_cost(current_level: int) -> int:
 
 @router.post("/multitap/{user_id}")
 async def buy_multitap(user_id: int):
-    # 1. Получаем текущие данные игрока из Supabase
-    res = supabase.table("users").select("points", "multitap_level", "level").eq("user_id", user_id).execute()
+    # 1. Получаем текущие данные игрока из таблицы profiles
+    res = supabase.table("profiles").select("points", "multitap_level", "level").eq("user_id", user_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Крыса не найдена в логове")
     
     user_data = res.data[0]
-    current_points = user_data.get("points", 0)
-    current_multitap = user_data.get("multitap_level", 1)
-    user_level = user_data.get("level", 1)
+    
+    # Защита на случай, если в базе лежат null значения
+    current_points = user_data.get("points") or 0
+    current_multitap = user_data.get("multitap_level") or 1
+    user_level = user_data.get("level") or 1
     
     # 2. Считаем стоимость апгрейда
     cost = calculate_cost(current_multitap)
     
-    # 3. Проверяем баланс на бэке (защита от читеров)
+    # 3. Проверяем баланс на бэке (защита от накрутки через Postman/скрипты)
     if current_points < cost:
         return {"status": "error", "message": "Недостаточно сыра 🧀"}
     
     new_points = current_points - cost
     new_multitap = current_multitap + 1
     
-    # 4. Сохраняем изменения в базу
-    update_res = supabase.table("users").update({
+    # 4. Сохраняем изменения обратно в таблицу profiles
+    update_res = supabase.table("profiles").update({
         "points": new_points,
         "multitap_level": new_multitap
     }).eq("user_id", user_id).execute()
