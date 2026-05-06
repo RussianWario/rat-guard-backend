@@ -1,10 +1,7 @@
+# clicker.py — Роутер обработки тапов и профилей
 from fastapi import APIRouter, HTTPException
-from supabase import create_client, Client
-import os
-
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ИМПОРТ КЛИЕНТА ИЗ ОТДЕЛЬНОГО МОДУЛЯ (Защита от цикличного импорта)
+from database import supabase 
 
 router = APIRouter()
 
@@ -45,15 +42,17 @@ async def handle_click(user_id: str):
     try:
         clean_id = int("".join(filter(str.isdigit, user_id)))
         
-        # 1. Получаем текущие данные (запрашиваем также level и stars для синхронизации)
-        res = supabase.table("profiles").select("points, multitap_level, level, stars").eq("id", clean_id).single().execute()
+        # 1. Получаем текущие данные (безопасно через execute без .single())
+        res = supabase.table("profiles").select("points, multitap_level, level, stars").eq("id", clean_id).execute()
         
         if not res.data:
             return {"status": "error", "message": "Пользователь не найден", "points": 0}
             
+        user_data = res.data[0]
+            
         # 2. Считаем новые очки с жесткой защитой от None/null в базе
-        current_points = res.data.get("points") or 0
-        multitap = res.data.get("multitap_level") or 1
+        current_points = user_data.get("points") or 0
+        multitap = user_data.get("multitap_level") or 1
         
         # Если в базе вдруг записан 0 или null, принудительно ставим силу клика = 1
         click_power = int(multitap) if multitap and multitap > 0 else 1
@@ -66,8 +65,8 @@ async def handle_click(user_id: str):
         return {
             "status": "ok", 
             "points": new_points,
-            "level": res.data.get("level", 1) or 1,
-            "stars": res.data.get("stars", 0) or 0
+            "level": user_data.get("level", 1) or 1,
+            "stars": user_data.get("stars", 0) or 0
         }
         
     except Exception as e:
