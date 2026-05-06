@@ -102,6 +102,9 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
                 "points": 0,
                 "total_clicks": 0,       # Добавлено для корректного трекинга квестов
                 "multitap_level": 1,
+                "rat_helper_level": 0,
+                "factory_level": 0,
+                "syndicate_level": 0,
                 "level": 1,
                 "stars": 0
             }
@@ -112,6 +115,9 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
         
         # Защита фронтенда: гарантируем, что критические поля не прилетят как None
         if user_data.get("multitap_level") is None: user_data["multitap_level"] = 1
+        if user_data.get("rat_helper_level") is None: user_data["rat_helper_level"] = 0
+        if user_data.get("factory_level") is None: user_data["factory_level"] = 0
+        if user_data.get("syndicate_level") is None: user_data["syndicate_level"] = 0
         if user_data.get("level") is None: user_data["level"] = 1
         if user_data.get("stars") is None: user_data["stars"] = 0
         if user_data.get("total_clicks") is None: user_data["total_clicks"] = 0
