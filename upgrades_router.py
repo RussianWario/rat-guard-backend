@@ -1,49 +1,66 @@
-# upgrades_router.py — Изолированный роутер для прокачки
+# upgrades_router.py — Изолированный роутер для прокачки пассивных зданий и клика
 from fastapi import APIRouter, HTTPException
 import math
-
-# ИМПОРТ КЛИЕНТА ИЗ ОТДЕЛЬНОГО МОДУЛЯ (Защита от цикличного импорта)
 from database import supabase 
 
 router = APIRouter(prefix="/upgrade", tags=["Upgrades"])
 
-MULTITAP_BASE_COST = 100
-MULTITAP_COST_MULTIPLIER = 2
+UPGRADE_CONFIG = {
+    "multitap":   {"base_cost": 100,   "multiplier": 2.0, "db_column": "multitap_level"},
+    "rat_helper": {"base_cost": 500,   "multiplier": 2.2, "db_column": "rat_helper_level"},
+    "factory":    {"base_cost": 2500,  "multiplier": 2.5, "db_column": "factory_level"},
+    "syndicate":  {"base_cost": 15000, "multiplier": 3.0, "db_column": "syndicate_level"}
+}
 
-def calculate_cost(current_level: int) -> int:
-    if current_level < 1:
-        current_level = 1
-    return int(MULTITAP_BASE_COST * math.pow(MULTITAP_COST_MULTIPLIER, current_level - 1))
+def calculate_upgrade_cost(upgrade_type: str, current_level: int) -> int:
+    cfg = UPGRADE_CONFIG[upgrade_type]
+    # Для пассивных построек уровень 0 означает покупку первого уровня по базовой стоимости
+    lvl = current_level if current_level >= 1 else 1
+    power = 0 if (upgrade_type != "multitap" and current_level == 0) else lvl
+    return int(cfg["base_cost"] * math.pow(cfg["multiplier"], power))
 
-@router.post("/multitap/{user_id}")
-async def buy_multitap(user_id: int):
-    # 1. Получаем текущие данные игрока из таблицы profiles по полю "id"
-    res = supabase.table("profiles").select("points", "multitap_level", "level").eq("id", user_id).execute()
+@router.post("/{upgrade_type}/{user_id}")
+async def buy_upgrade(upgrade_type: str, user_id: int):
+    if upgrade_type not in UPGRADE_CONFIG:
+        return {"status": "error", "message": "Неизвестный тип улучшения"}
+
+    cfg = UPGRADE_CONFIG[upgrade_type]
+    db_col = cfg["db_column"]
+
+    # 1. Получаем текущие данные игрока по верному полю "user_id"
+    res = supabase.table("profiles").select("points", db_col, "level").eq("user_id", user_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="Крыса не найдена в логове")
     
     user_data = res.data[0]
     
-    # Защита на случай, если в базе лежат null значения
     current_points = user_data.get("points") or 0
-    current_multitap = user_data.get("multitap_level") or 1
-    user_level = user_data.get("level") or 1
+    current_level = user_data.get(db_col) or 0
+    global_level = user_data.get("level") or 1
     
     # 2. Считаем стоимость апгрейда
-    cost = calculate_cost(current_multitap)
+    cost = calculate_upgrade_cost(upgrade_type, current_level)
     
-    # 3. Проверяем баланс на бэке (защита от накрутки)
+    # 3. Проверяем баланс на бэке
     if current_points < cost:
         return {"status": "error", "message": "Недостаточно сыра 🧀"}
     
     new_points = current_points - cost
-    new_multitap = current_multitap + 1
+    new_level = current_level + 1
     
-    # 4. Сохраняем изменения обратно в таблицу profiles, используя фильтр по "id"
-    update_res = supabase.table("profiles").update({
+    # Считаем, нужно ли повысить уровень логова за покупку апгрейда
+    # Каждые 5 общих уровней апгрейда дают +1 к уровню глобального Логова (к примеру)
+    if new_level % 5 == 0:
+        global_level += 1
+    
+    # 4. Сохраняем изменения обратно в профиль по user_id
+    update_data = {
         "points": new_points,
-        "multitap_level": new_multitap
-    }).eq("id", user_id).execute()
+        db_col: new_level,
+        "level": global_level
+    }
+    
+    update_res = supabase.table("profiles").update(update_data).eq("user_id", user_id).execute()
     
     if not update_res.data:
         raise HTTPException(status_code=500, detail="Ошибка при записи в логово")
@@ -51,6 +68,6 @@ async def buy_multitap(user_id: int):
     return {
         "status": "ok",
         "points": new_points,
-        "multitap_level": new_multitap,
-        "level": user_level
+        "new_level": new_level,
+        "global_level": global_level
     }
