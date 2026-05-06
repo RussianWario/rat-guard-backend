@@ -12,7 +12,8 @@ from database import supabase
 
 # Импорт роутеров и логики лидерборда
 from clicker import router as clicker_router
-from upgrades_router import router as upgrades_router  # Наш новый модуль улучшений
+from upgrades_router import router as upgrades_router  # Наш модуль улучшений
+from quests_router import router as quests_router      # Подключаем систему квестов
 from leaderboard_logic import get_leaderboard_data 
 
 # --- Конфигурация ---
@@ -35,6 +36,7 @@ app.add_middleware(
 # Подключение изолированных роутеров в FastAPI
 app.include_router(clicker_router)
 app.include_router(upgrades_router)  # Регистрируем роутер улучшений
+app.include_router(quests_router)    # Регистрируем роутер квестов
 
 # --- ЛОГИКА ТЕЛЕГРАМ-БОТА ---
 @dp.message_handler(commands=['start'])
@@ -50,6 +52,7 @@ async def send_welcome(message: types.Message):
         f"🧀 <b>Привет, {user_name}! Добро пожаловать в Rat Guard Hub!</b>\n\n"
         "Rat Guard — это Mini App игра для зрителей канала <b>kirisaa</b>.\n\n"
         "— Добывай сыр тапами по экрану (БЕЗ ЛИМИТОВ!).\n"
+        "— Выполняй игровые квесты внутри Логова.\n"
         "— Врывайся в топ-10 лучших крыс.\n\n"
         "Жми кнопку <b>«Склад 🧀»</b> слева от ввода, чтобы начать! 🐀🚀"
     )
@@ -83,17 +86,21 @@ async def get_leaderboard():
 @app.get("/get_profile/{user_id}")
 async def get_profile(user_id: str, username: str = Query("Крыса")):
     try:
+        # Извлекаем чистый ID пользователя Telegram
         clean_id = int("".join(filter(str.isdigit, user_id)))
         avatar_url = await get_tg_avatar(clean_id)
-        result = supabase.table("profiles").select("*").eq("id", clean_id).execute()
+        
+        # Запрашиваем профиль по верной колонке 'user_id'
+        result = supabase.table("profiles").select("*").eq("user_id", clean_id).execute()
         
         # Если пользователя еще нет в базе — регистрируем с дефолтными параметрами
         if not result.data:
             new_user = {
-                "id": clean_id, 
+                "user_id": clean_id, 
                 "username": username,
                 "avatar_url": avatar_url,
                 "points": 0,
+                "total_clicks": 0,       # Добавлено для корректного трекинга квестов
                 "multitap_level": 1,
                 "level": 1,
                 "stars": 0
@@ -103,14 +110,13 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
         
         user_data = result.data[0]
         
-        # Защита фронтенда: гарантируем, что поля не прилетят как None/null
-        if user_data.get("multitap_level") is None:
-            user_data["multitap_level"] = 1
-        if user_data.get("level") is None:
-            user_data["level"] = 1
-        if user_data.get("stars") is None:
-            user_data["stars"] = 0
+        # Защита фронтенда: гарантируем, что критические поля не прилетят как None
+        if user_data.get("multitap_level") is None: user_data["multitap_level"] = 1
+        if user_data.get("level") is None: user_data["level"] = 1
+        if user_data.get("stars") is None: user_data["stars"] = 0
+        if user_data.get("total_clicks") is None: user_data["total_clicks"] = 0
         
+        # Динамическое обновление юзернейма или аватарки, если они изменились в TG
         updates = {}
         if username != "Крыса" and user_data.get("username") != username:
             updates["username"] = username
@@ -118,7 +124,7 @@ async def get_profile(user_id: str, username: str = Query("Крыса")):
             updates["avatar_url"] = avatar_url
 
         if updates:
-            supabase.table("profiles").update(updates).eq("id", clean_id).execute()
+            supabase.table("profiles").update(updates).eq("user_id", clean_id).execute()
             user_data.update(updates)
 
         return user_data
