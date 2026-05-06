@@ -5,19 +5,59 @@ from database import supabase
 
 router = APIRouter(prefix="/upgrade", tags=["Upgrades"])
 
+# Конфигурация стоимости, множителей и ПАССИВНОГО ДОХОДА за каждый уровень
 UPGRADE_CONFIG = {
-    "multitap":   {"base_cost": 100,   "multiplier": 2.0, "db_column": "multitap_level"},
-    "rat_helper": {"base_cost": 500,   "multiplier": 2.2, "db_column": "rat_helper_level"},
-    "factory":    {"base_cost": 2500,  "multiplier": 2.5, "db_column": "factory_level"},
-    "syndicate":  {"base_cost": 15000, "multiplier": 3.0, "db_column": "syndicate_level"}
+    "multitap": {
+        "base_cost": 100,
+        "multiplier": 2.0,
+        "db_column": "multitap_level",
+        "pps_per_level": 0       # Мультитап увеличивает клик, а не пассивный доход
+    },
+    "rat_helper": {
+        "base_cost": 500,
+        "multiplier": 2.2,
+        "db_column": "rat_helper_level",
+        "pps_per_level": 2       # Каждая дрессированная крыса дает +2 сыра в секунду
+    },
+    "factory": {
+        "base_cost": 2500,
+        "multiplier": 2.5,
+        "db_column": "factory_level",
+        "pps_per_level": 15      # Каждая мануфактура дает +15 сыра в секунду
+    },
+    "syndicate": {
+        "base_cost": 15000,
+        "multiplier": 3.0,
+        "db_column": "syndicate_level",
+        "pps_per_level": 80      # Каждый синдикат дает +80 сыра в секунду
+    }
 }
 
 def calculate_upgrade_cost(upgrade_type: str, current_level: int) -> int:
     cfg = UPGRADE_CONFIG[upgrade_type]
-    # Для пассивных построек уровень 0 означает покупку первого уровня по базовой стоимости
     lvl = current_level if current_level >= 1 else 1
     power = 0 if (upgrade_type != "multitap" and current_level == 0) else lvl
     return int(cfg["base_cost"] * math.pow(cfg["multiplier"], power))
+
+def calculate_total_pps(user_data: dict, updated_type: str, new_type_level: int) -> int:
+    """
+    Высчитывает суммарный пассивный доход (PPS) на основе текущих уровней из базы
+    и с учетом только что купленного апгрейда.
+    """
+    total_pps = 0
+    for utype, cfg in UPGRADE_CONFIG.items():
+        if utype == "multitap":
+            continue
+        
+        # Если это апгрейд, который мы сейчас покупаем — берем его новый уровень
+        if utype == updated_type:
+            level = new_type_level
+        else:
+            level = user_data.get(cfg["db_column"]) or 0
+            
+        total_pps += level * cfg["pps_per_level"]
+        
+    return total_pps
 
 @router.post("/{upgrade_type}/{user_id}")
 async def buy_upgrade(upgrade_type: str, user_id: int):
@@ -28,7 +68,11 @@ async def buy_upgrade(upgrade_type: str, user_id: int):
     db_col = cfg["db_column"]
 
     # 1. Получаем текущие данные игрока по верному полю "user_id"
-    res = supabase.table("profiles").select("points", db_col, "level").eq("user_id", user_id).execute()
+    # Дополнительно запрашиваем уровни всех остальных построек для пересчета pps
+    res = supabase.table("profiles").select(
+        "points", "level", "multitap_level", "rat_helper_level", "factory_level", "syndicate_level"
+    ).eq("user_id", user_id).execute()
+    
     if not res.data:
         raise HTTPException(status_code=404, detail="Крыса не найдена в логове")
     
@@ -41,15 +85,17 @@ async def buy_upgrade(upgrade_type: str, user_id: int):
     # 2. Считаем стоимость апгрейда
     cost = calculate_upgrade_cost(upgrade_type, current_level)
     
-    # 3. Проверяем баланс на бэке
+    # 3. Проверяем баланс на бэке (защита от накрутки фейк-пакетами)
     if current_points < cost:
         return {"status": "error", "message": "Недостаточно сыра 🧀"}
     
     new_points = current_points - cost
     new_level = current_level + 1
     
+    # Динамически пересчитываем pps на основе новых уровней бизнеса
+    new_pps = calculate_total_pps(user_data, upgrade_type, new_level)
+    
     # Считаем, нужно ли повысить уровень логова за покупку апгрейда
-    # Каждые 5 общих уровней апгрейда дают +1 к уровню глобального Логова (к примеру)
     if new_level % 5 == 0:
         global_level += 1
     
@@ -57,7 +103,8 @@ async def buy_upgrade(upgrade_type: str, user_id: int):
     update_data = {
         "points": new_points,
         db_col: new_level,
-        "level": global_level
+        "level": global_level,
+        "pps": new_pps  # Передаем обновленное значение пассивного дохода в базу
     }
     
     update_res = supabase.table("profiles").update(update_data).eq("user_id", user_id).execute()
@@ -69,5 +116,6 @@ async def buy_upgrade(upgrade_type: str, user_id: int):
         "status": "ok",
         "points": new_points,
         "new_level": new_level,
-        "global_level": global_level
+        "global_level": global_level,
+        "pps": new_pps
     }
