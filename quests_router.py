@@ -1,4 +1,4 @@
-# quests_router.py — Логика системы квестов кликера
+# quests_router.py — Логика системы уровней, опыта и квестов
 from fastapi import APIRouter, HTTPException
 from database import supabase
 
@@ -7,19 +7,21 @@ router = APIRouter(prefix="/quests", tags=["Quests"])
 @router.get("/{user_id}")
 async def get_user_quests(user_id: int):
     """
-    Получить список всех квестов из базы данных 
-    с пометкой 'is_completed' индивидуально для конкретного user_id
+    Получает список квестов, которые доступны игроку по уровню,
+    с пометкой о выполнении.
     """
     try:
-        # 1. Загружаем все доступные квесты из таблицы quests
-        quests_res = supabase.table("quests").select("*").execute()
+        # 1. Получаем уровень игрока
+        user_res = supabase.table("profiles").select("level").eq("user_id", user_id).single().execute()
+        user_level = user_res.data.get("level") or 1
+
+        # 2. Загружаем квесты, которые подходят под уровень (required_level <= user_level)
+        quests_res = supabase.table("quests").select("*").lte("required_level", user_level).execute()
         
-        # 2. Загружаем ID квестов, которые эта крыса уже выполнила
+        # 3. Загружаем выполненные квесты
         completed_res = supabase.table("user_quests").select("quest_id").eq("user_id", user_id).execute()
-        
         completed_ids = [item["quest_id"] for item in completed_res.data] if completed_res.data else []
         
-        # 3. Формируем список квестов, подмешивая флаг выполнения
         quests_list = []
         for q in quests_res.data:
             q_copy = q.copy()
@@ -34,61 +36,59 @@ async def get_user_quests(user_id: int):
 @router.post("/claim/{user_id}/{quest_id}")
 async def claim_quest_reward(user_id: int, quest_id: int):
     """
-    Проверяет, выполнил ли юзер условия квеста, 
-    и если да — начисляет сыр (points) и звёзды (stars)
+    Проверяет выполнение квеста, начисляет XP и Сыр.
+    Если XP хватает для Level Up — повышает уровень и дает Звезду.
     """
     try:
-        # 1. Проверяем, не забирал ли он уже награду за этот квест
+        # 1. Проверка на повторное получение
         check = supabase.table("user_quests").select("*").eq("user_id", user_id).eq("quest_id", quest_id).execute()
         if check.data:
-            return {"status": "error", "message": "Награда за эту задачу уже в твоей норке! Rat_Guard бдит 🐀"}
+            return {"status": "error", "message": "Награда уже в норке! 🐀"}
             
-        # 2. Вытягиваем данные квеста и профиля игрока по колонке user_id
+        # 2. Получаем данные квеста и профиля
         quest_res = supabase.table("quests").select("*").eq("id", quest_id).execute()
-        user_res = supabase.table("profiles").select("points", "level", "stars", "multitap_level", "total_clicks").eq("user_id", user_id).execute()
+        user_res = supabase.table("profiles").select("*").eq("user_id", user_id).execute()
         
         if not quest_res.data or not user_res.data:
-            raise HTTPException(status_code=404, detail="Квест или профиль игрока не найден в базе")
+            raise HTTPException(status_code=404, detail="Данные не найдены")
             
         quest = quest_res.data[0]
-        user_data = user_res.data[0]
+        user = user_res.data[0]
         
-        # Вытаскиваем текущие статы игрока (с защитой от None)
-        user_level = user_data.get("level") or 1
-        user_points = user_data.get("points") or 0
-        user_stars = user_data.get("stars") or 0
-        user_multitap = user_data.get("multitap_level") or 1
-        user_total_clicks = user_data.get("total_clicks") or 0
+        # 3. ПРОВЕРКА УСЛОВИЙ (динамическая по quest_type)
+        q_type = quest["quest_type"]
+        req_val = quest["required_value"]
+        current_val = user.get(q_type) or 0
         
-        req_value = quest["required_value"]
-        quest_type = quest["quest_type"]
+        if current_val < req_val:
+            return {"status": "error", "message": f"Условие не выполнено! Нужно {req_val}, у тебя {current_val}"}
 
-        # 3. ПРОВЕРКА ВЫПОЛНЕНИЯ УСЛОВИЙ
-        if quest_type == "level":
-            if user_level < req_value:
-                return {"status": "error", "message": f"Твое Логово ещё слабовато! Требуется {req_value} уровень. (У тебя {user_level})"}
-                
-        elif quest_type == "total_clicks":
-            if user_total_clicks < req_value:
-                return {"status": "error", "message": f"Маловато сыра натапано за всё время! Нужно: {req_value:,}. (У тебя: {user_total_clicks})"}
-                
-        elif quest_type == "multitap_level":
-            if user_multitap < req_value:
-                return {"status": "error", "message": f"Слабые лапки! Прокачай Мультитап до {req_value} уровня. (У тебя {user_multitap})"}
-        else:
-            return {"status": "error", "message": "Неизвестный тип квеста"}
-
-        # 4. НАЧИСЛЕНИЕ НАГРАДЫ И ФИКСАЦИЯ
-        new_points = user_points + quest["reward_points"]
-        new_stars = user_stars + quest["reward_stars"]
+        # 4. РАСЧЕТ ПРОГРЕССА (Опыт и Уровень)
+        new_xp = (user.get("xp") or 0) + quest["reward_xp"]
+        new_points = (user.get("points") or 0) + quest["reward_points"]
+        current_lvl = user.get("level") or 1
+        xp_target = user.get("xp_to_next_level") or 100
+        stars = user.get("stars") or 0
         
-        # Обновляем профиль в Supabase по user_id
+        leveled_up = False
+        
+        # Цикл на случай, если опыта столько, что игрок перепрыгнул через несколько уровней
+        while new_xp >= xp_target:
+            new_xp -= xp_target
+            current_lvl += 1
+            stars += 1  # ЗВЕЗДА ТОЛЬКО ЗА НОВЫЙ УРОВЕНЬ
+            xp_target = int(xp_target * 1.5) # Пропорциональное усложнение на 50%
+            leveled_up = True
+
+        # 5. СОХРАНЕНИЕ
         supabase.table("profiles").update({
             "points": new_points,
-            "stars": new_stars
+            "xp": new_xp,
+            "xp_to_next_level": xp_target,
+            "level": current_lvl,
+            "stars": stars
         }).eq("user_id", user_id).execute()
         
-        # Записываем лог, чтобы нельзя было заабузить повторно
         supabase.table("user_quests").insert({
             "user_id": user_id,
             "quest_id": quest_id
@@ -96,12 +96,15 @@ async def claim_quest_reward(user_id: int, quest_id: int):
         
         return {
             "status": "ok",
-            "message": f"Успешно! Получено {quest['reward_points']} 🧀 и {quest['reward_stars']} ⭐",
-            "points": new_points,
-            "stars": new_stars,
-            "level": user_level
+            "message": "Уровень повышен!" if leveled_up else "Награда получена!",
+            "leveled_up": leveled_up,
+            "new_level": current_lvl,
+            "new_xp": new_xp,
+            "xp_target": xp_target,
+            "stars": stars,
+            "points": new_points
         }
         
     except Exception as e:
-        print(f"Ошибка при обработке квеста: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка Логова при обработке награды")
+        print(f"Ошибка claim_quest: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка обработки награды")
